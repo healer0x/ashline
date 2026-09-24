@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Fraunces", ui-serif, Georgia, serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --color-ink: #161310;
+  --color-paper: #f3eee6;
+  --color-card: #f7f3ec;
+  --color-rule: #e0d8cc;
+  --color-mute: #6f675c;
+  --color-filament: #c45c28;
+  --color-ash: #2a2420;
+  --color-ember: #a33b32;
+
+  --shadow-plate: 0 0 0 1px rgba(22, 19, 16, 0.14), 0 28px 50px -32px rgba(22, 19, 16, 0.65);
+  --shadow-card: 0 0 0 1px rgba(22, 19, 16, 0.08);
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    background-color: var(--color-paper);
+    background-image: linear-gradient(to bottom, transparent 31px, rgba(22, 19, 16, 0.045) 32px);
+    background-size: 100% 32px;
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  ::selection {
+    background: #f0d2c2;
+    color: var(--color-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-filament);
+    outline-offset: 2px;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rise {
+  animation: rise 220ms ease-out;
+}
+
+@keyframes filament {
+  0%,
+  100% {
+    transform: scaleY(0.4);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.filament-bar {
+  transform-origin: center;
+  animation: filament 900ms ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .filament-bar {
+    animation: none !important;
+  }
+}
