@@ -1,20 +1,36 @@
 export function extractMint(raw: string): string | null {
-  const text = raw
-    .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, "")
-    .replace(/\s+/g, "")
-    .trim();
+  const text = raw.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, "").trim();
   if (!text) return null;
-  const labeled = text.match(
-    /(?:coin|token|address|account|mint)\/([1-9A-HJ-NP-Za-km-z]{32,44})/i,
-  );
+  const evm = text.match(/0x[a-fA-F0-9]{40}/);
+  if (evm) return evm[0];
+  const compact = text.replace(/\s+/g, "");
+  const labeled = compact.match(/(?:coin|token|address|account|mint)\/([1-9A-HJ-NP-Za-km-z]{32,44})/i);
   if (labeled?.[1]) return labeled[1];
-  const all = text.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g);
+  const all = compact.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g);
   if (!all?.length) return null;
   return all.sort((a, b) => b.length - a.length)[0] ?? null;
 }
 
+export function isEvmAddress(value: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/.test(value);
+}
+
 export function mintGroups(mint: string): string[] {
   return mint.match(/.{1,4}/g) ?? [mint];
+}
+
+export function walletUrl(chainId: string, address: string): string {
+  const hosts: Record<string, string> = {
+    solana: "https://solscan.io/account/",
+    ethereum: "https://etherscan.io/address/",
+    base: "https://basescan.org/address/",
+    bsc: "https://bscscan.com/address/",
+    polygon: "https://polygonscan.com/address/",
+    arbitrum: "https://arbiscan.io/address/",
+    optimism: "https://optimistic.etherscan.io/address/",
+    avalanche: "https://snowtrace.io/address/",
+  };
+  return `${hosts[chainId] ?? "https://dexscreener.com/search?q="}${address}`;
 }
 
 export function shortAddr(value: string): string {

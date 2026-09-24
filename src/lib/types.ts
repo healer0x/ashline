@@ -6,6 +6,7 @@ export type Trade = {
   sol: number;
   tokens: number;
   url: string;
+  display?: string;
 };
 
 export type HolderRow = {
@@ -18,8 +19,32 @@ export type HolderRow = {
   isDev: boolean;
 };
 
+export type PriorLaunch = {
+  name: string;
+  symbol: string;
+  mint: string;
+  chainLabel: string;
+  url: string;
+  note: string;
+};
+
+export type RiskPoint = {
+  points: number;
+  text: string;
+  sourceUrl: string;
+  sourceLabel: string;
+};
+
+export type RiskScore = {
+  score: number;
+  band: "lower" | "watch" | "elevated";
+  points: RiskPoint[];
+};
+
 export type ChainReport = {
   mint: string;
+  chainId: string;
+  chainLabel: string;
   name: string;
   symbol: string;
   image: string | null;
@@ -44,7 +69,11 @@ export type ChainReport = {
   solscanUrl: string;
   dexUrl: string;
   rugcheckUrl: string;
+  explorerUrl: string;
+  explorerLabel: string;
   creators: { role: string; address: string }[];
+  priorLaunches: PriorLaunch[];
+  risk: RiskScore;
   holderRows: HolderRow[];
   curvePct: number | null;
   topWalletExCurvePct: number | null;
@@ -83,6 +112,19 @@ export type Claim = {
   sourceLabel: string;
 };
 
+export type Mismatch = {
+  title: string;
+  hype: string;
+  chainFact: string;
+  sourceUrl: string;
+};
+
+export type EarlierLaunch = {
+  name: string;
+  outcome: string;
+  sourceUrl: string;
+};
+
 export type Dossier = {
   headline: string;
   timeline: string;
@@ -90,6 +132,12 @@ export type Dossier = {
   web: string;
   flags: Flag[];
   claims: Claim[];
+  mismatches: Mismatch[];
+  devWallet: string;
+  devHandle: string;
+  devNote: string;
+  earlier: EarlierLaunch[];
+  reply: string;
 };
 
 export type ResearchEvent =
@@ -100,3 +148,16 @@ export type ResearchEvent =
   | { type: "citations"; urls: string[] }
   | { type: "error"; message: string }
   | { type: "done" };
+
+export type TapeRow = {
+  mint: string;
+  chainId: string;
+  chainLabel: string;
+  name: string;
+  symbol: string;
+  url: string;
+  liquidityUsd: number | null;
+  marketCapUsd: number | null;
+  createdAt: number | null;
+  flags: string[];
+};

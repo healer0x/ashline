@@ -1,3 +1,5 @@
+import { scoreChain } from "./risk";
+import { readEvm } from "./evm.server";
 import type { ChainReport, HolderRow, Trade } from "./types";
 
 const RPCS = ["https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com"];
@@ -268,6 +270,11 @@ function mapRisks(raw: unknown): ChainReport["risks"] {
 }
 
 export async function readChain(mint: string): Promise<ChainReport> {
+  if (mint.startsWith("0x")) return readEvm(mint);
+  return readSolana(mint);
+}
+
+async function readSolana(mint: string): Promise<ChainReport> {
   const hit = cache.get(mint);
   if (hit && Date.now() - hit.at < 90_000) return hit.report;
 
@@ -395,6 +402,8 @@ export async function readChain(mint: string): Promise<ChainReport> {
 
   const report: ChainReport = {
     mint,
+    chainId: "solana",
+    chainLabel: "Solana",
     name: str(pump?.name) ?? str(base.name) ?? str((rug.tokenMeta as Json | undefined)?.name) ?? "Unknown token",
     symbol: str(pump?.symbol) ?? str(base.symbol) ?? str((rug.tokenMeta as Json | undefined)?.symbol) ?? "—",
     image: str(info.imageUrl) ?? str(pump?.image_uri),
@@ -419,7 +428,11 @@ export async function readChain(mint: string): Promise<ChainReport> {
     solscanUrl,
     dexUrl,
     rugcheckUrl,
+    explorerUrl: solscanUrl,
+    explorerLabel: "Solscan",
     creators,
+    priorLaunches: [],
+    risk: { score: 0, band: "watch", points: [] },
     holderRows,
     curvePct: holderRows.length ? curvePct : null,
     topWalletExCurvePct,
@@ -437,6 +450,8 @@ export async function readChain(mint: string): Promise<ChainReport> {
       { label: "Solscan", url: solscanUrl },
     ],
   };
+  report.gaps.push("Earlier launches by this deployer are not in the chain index. The agent has to search the wallet.");
+  report.risk = scoreChain(report);
 
   cache.set(mint, { at: Date.now(), report });
   return report;

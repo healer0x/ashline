@@ -85,6 +85,27 @@ function asDossier(raw: Record<string, unknown>): Dossier | null {
         sourceLabel: clip(String(claim.source_label ?? "Source"), 40),
       };
     }),
+    mismatches: (Array.isArray(raw.mismatches) ? raw.mismatches : []).slice(0, 6).map((row) => {
+      const item = (row ?? {}) as Record<string, unknown>;
+      return {
+        title: clip(String(item.title ?? "Mismatch"), 80),
+        hype: clip(String(item.hype ?? ""), 280),
+        chainFact: clip(String(item.chain_fact ?? ""), 280),
+        sourceUrl: typeof item.source_url === "string" ? item.source_url : "",
+      };
+    }),
+    devWallet: clip(String(raw.dev_wallet ?? ""), 90),
+    devHandle: clip(String(raw.dev_handle ?? ""), 80),
+    devNote: clip(String(raw.dev_note ?? ""), 500),
+    earlier: (Array.isArray(raw.earlier) ? raw.earlier : []).slice(0, 6).map((row) => {
+      const item = (row ?? {}) as Record<string, unknown>;
+      return {
+        name: clip(String(item.name ?? "Earlier launch"), 80),
+        outcome: clip(String(item.outcome ?? ""), 240),
+        sourceUrl: typeof item.source_url === "string" ? item.source_url : "",
+      };
+    }),
+    reply: clip(String(raw.reply ?? ""), 500),
   };
 }
 
@@ -93,6 +114,8 @@ function toolPayload(name: string, chain: ChainReport): Record<string, unknown> 
   if (name === "inspect_identity") {
     return {
       sources,
+      chain: chain.chainLabel,
+      chainId: chain.chainId,
       name: chain.name,
       symbol: chain.symbol,
       mint: chain.mint,
@@ -136,6 +159,18 @@ function toolPayload(name: string, chain: ChainReport): Record<string, unknown> 
         "A same-slot cluster is a receipt to inspect, not proof of a bundle by itself. Say when the creation slot was outside the scan.",
     };
   }
+  if (name === "inspect_deployer") {
+    return {
+      sources,
+      chain: chain.chainLabel,
+      creators: chain.creators,
+      priorLaunches: chain.priorLaunches,
+      devHeldPct: chain.devHeldPct,
+      gaps: chain.gaps,
+      reading:
+        "The chain index does not list earlier launches for most deployers. Use web_search and x_search on the wallet and any handle. If you cannot find an earlier coin, say unread. Do not invent one.",
+    };
+  }
   return {
     sources,
     priceUsd: chain.priceUsd,
@@ -153,17 +188,19 @@ function toolPayload(name: string, chain: ChainReport): Record<string, unknown> 
 const TOOLS = [
   { type: "web_search" },
   { type: "x_search" },
-  ...["inspect_identity", "inspect_holders", "inspect_trades", "inspect_liquidity"].map((name) => ({
+  ...["inspect_identity", "inspect_holders", "inspect_trades", "inspect_liquidity", "inspect_deployer"].map((name) => ({
     type: "function",
     name,
     description:
       name === "inspect_identity"
-        ? "Read token name, authorities, creator wallets, websites, and whether it is still on a bonding curve."
+        ? "Read token name, chain, authorities, creator wallets, websites, and whether it is still on a bonding curve."
         : name === "inspect_holders"
-          ? "Read holder count, top holders, curve-versus-wallet concentration, and creator balance."
+          ? "Read holder count, top holders, pool-versus-wallet concentration, and creator balance."
           : name === "inspect_trades"
             ? "Read the last buy, the latest trade, a short tape, and any same-slot buy cluster in the launch window."
-            : "Read liquidity, market cap, volume, SOL in the curve, and the reported ATH print.",
+            : name === "inspect_deployer"
+              ? "Read the deployer or owner wallet so you can search earlier launches and an X handle. Do not invent history."
+              : "Read liquidity, market cap, volume, curve reserves, and the reported ATH print.",
     parameters: {
       type: "object",
       properties: {
@@ -213,8 +250,43 @@ const TOOLS = [
             required: ["text", "source_url", "source_label"],
           },
         },
+        mismatches: {
+          type: "array",
+          description: "Places the timeline and the chain do not say the same thing.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              title: { type: "string" },
+              hype: { type: "string" },
+              chain_fact: { type: "string" },
+              source_url: { type: "string" },
+            },
+            required: ["title", "hype", "chain_fact", "source_url"],
+          },
+        },
+        dev_wallet: { type: "string" },
+        dev_handle: { type: "string", description: "X handle if a post or page showed one. Empty if unread." },
+        dev_note: { type: "string" },
+        earlier: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              name: { type: "string" },
+              outcome: { type: "string" },
+              source_url: { type: "string" },
+            },
+            required: ["name", "outcome", "source_url"],
+          },
+        },
+        reply: {
+          type: "string",
+          description: "Short answer to @agent is this legit? Receipts only. No buy, sell, or yes-or-no trade.",
+        },
       },
-      required: ["headline", "timeline", "chain", "web", "flags", "claims"],
+      required: ["headline", "timeline", "chain", "web", "flags", "claims", "mismatches", "dev_wallet", "dev_handle", "dev_note", "earlier", "reply"],
     },
   },
 ];
@@ -226,6 +298,8 @@ Every claim needs a receipt URL from a tool result, an X post, or a page you ope
 Cross-check the timeline against holder spread, liquidity, creator wallets, and trade clusters.
 If sources disagree, say so. If a fact was not in a tool result, say it is unread. Never invent wallets, percentages, or posts.
 Do not tell anyone to buy, sell, ape, avoid, or hold. No price targets. Research only.
+When the timeline and the chain disagree, put that in mismatches. Follow the deployer wallet with inspect_deployer, then search X and the web for earlier launches and a handle. If you cannot source an earlier coin, leave earlier empty.
+The reply field answers "@agent is this legit?" in a few sentences. It says what the receipts show. It is not a yes, a no, or a trade.
 File the dossier with file_dossier once chain tools and X search have actually run.`;
 
 async function callGrok(key: string, body: Record<string, unknown>): Promise<GrokResponse> {
@@ -238,7 +312,7 @@ async function callGrok(key: string, body: Record<string, unknown>): Promise<Gro
     body: JSON.stringify({
       model: MODEL,
       temperature: 0.2,
-      max_output_tokens: 2200,
+      max_output_tokens: 3200,
       reasoning: { effort: "low" },
       ...body,
     }),
@@ -274,7 +348,7 @@ function trace(id: string, tool: string, state: TraceItem["state"], detail: stri
   return { type: "trace", item: { id, tool, state, detail: clip(detail, 180) } };
 }
 
-async function runAgent(mint: string, chain: ChainReport, send: Send) {
+async function runAgent(mint: string, chain: ChainReport, send: Send, mode: "report" | "reply") {
   const key = process.env.XAI_API_KEY;
   if (!key) {
     send({ type: "error", message: "Grok is not available in this environment. The chain reading above is still live." });
@@ -284,12 +358,10 @@ async function runAgent(mint: string, chain: ChainReport, send: Send) {
   let input: unknown = [
     {
       role: "user",
-      content: `Research this Solana mint and file a sourced dossier: ${mint}
-Canonical links, cite only if tools agree they belong to this mint:
-${chain.pumpUrl}
-${chain.solscanUrl}
-${chain.dexUrl}
-${chain.rugcheckUrl}`,
+      content: `Research this ${chain.chainLabel} contract and file a sourced dossier: ${mint}
+${mode === "reply" ? 'The person asked "@agent is this legit?". Answer in the reply field from receipts only.' : "File the one-page report with mismatches and the deployer trail."}
+Canonical links, cite only if tools agree they belong to this contract:
+${chain.sources.map((source) => source.url).join("\n")}`,
     },
   ];
   let previous: string | undefined;
@@ -415,7 +487,7 @@ ${chain.rugcheckUrl}`,
   send({ type: "dossier", dossier: filed });
 }
 
-export function openResearch(mint: string): ReadableStream<Uint8Array> {
+export function openResearch(mint: string, mode: "report" | "reply" = "report"): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream({
     async start(controller) {
@@ -431,7 +503,7 @@ export function openResearch(mint: string): ReadableStream<Uint8Array> {
         const chain = await readChain(mint);
         send({ type: "chain", chain });
         send({ type: "status", text: "Grok is choosing tools." });
-        await runAgent(mint, chain, send);
+        await runAgent(mint, chain, send, mode);
         send({ type: "done" });
       } catch (error) {
         const message = error instanceof Error ? error.message : "The read failed.";

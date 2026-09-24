@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, Copy, Search } from "lucide-react";
-import { loadChain, research } from "@/lib/research.functions";
-import { ago, compactNum, extractMint, mintGroups, safeHref, shortAddr, sol, usd } from "@/lib/mint";
-import type { ChainReport, Dossier, ResearchEvent, TraceItem, Trade } from "@/lib/types";
+import { loadChain, loadTape, research } from "@/lib/research.functions";
+import { ago, compactNum, extractMint, isEvmAddress, mintGroups, safeHref, shortAddr, sol, usd, walletUrl } from "@/lib/mint";
+import type { ChainReport, Dossier, ResearchEvent, TapeRow, TraceItem, Trade } from "@/lib/types";
 
 const SAMPLE = "GXTCD25QkWM7DJ6JcmNxeCKggSgh22iXKMNxPE12DkCc";
 
@@ -14,9 +14,13 @@ const TOOL_LABEL: Record<string, string> = {
   inspect_holders: "Holders",
   inspect_trades: "Trades",
   inspect_liquidity: "Liquidity",
+  inspect_deployer: "Deployer",
   file_dossier: "Dossier",
 };
 
+const BASE_SAMPLE = "0x532f27101965dd16442E59d40670FaF5eBB142E4";
+
+type Lane = "desk" | "tape" | "reply";
 type Recent = { mint: string; symbol: string };
 
 export function Desk() {
@@ -34,6 +38,11 @@ export function Desk() {
   const [agentError, setAgentError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [reject, setReject] = useState<string | null>(null);
+  const [lane, setLane] = useState<Lane>("desk");
+  const [replyDraft, setReplyDraft] = useState("@ashline is this legit? ");
+  const [tape, setTape] = useState<TapeRow[]>([]);
+  const [tapeError, setTapeError] = useState<string | null>(null);
+  const [tapeLoading, setTapeLoading] = useState(false);
   const [recents, setRecents] = useState<Recent[]>([]);
   const chainSeq = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -78,13 +87,33 @@ export function Desk() {
       });
   }, [mint]);
 
+  useEffect(() => {
+    if (lane !== "tape") return;
+    let cancel = false;
+    setTapeLoading(true);
+    setTapeError(null);
+    loadTape()
+      .then((rows) => {
+        if (!cancel) setTape(rows);
+      })
+      .catch((error: unknown) => {
+        if (!cancel) setTapeError(error instanceof Error ? error.message : "The tape failed.");
+      })
+      .finally(() => {
+        if (!cancel) setTapeLoading(false);
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [lane]);
+
   function lockMint(value: string) {
     const next = extractMint(value);
-    if (!next || next.length < 43) {
+    if (!next || (!isEvmAddress(next) && next.length < 43)) {
       setReject(
         next
-          ? "That address looks cut off. A Solana contract is usually 43–44 characters."
-          : "Paste the full contract. Any Solana coin works, not only $GROKATHON.",
+          ? "That address looks cut off. Solana mints are usually 43–44 characters. EVM contracts start with 0x."
+          : "Paste a full contract. Solana, Base, Ethereum, and other chains all work.",
       );
       return null;
     }
@@ -102,10 +131,12 @@ export function Desk() {
     return next;
   }
 
-  async function readBothSides() {
+  async function readBothSides(mode: "report" | "reply" = "report") {
     if (running) return;
-    const next = lockMint(mint ?? draft);
+    const source = mode === "reply" ? replyDraft : (mint ?? draft);
+    const next = lockMint(source);
     if (!next) return;
+    setLane("desk");
     setRunning(true);
     setAgentError(null);
     setDossier(null);
@@ -113,7 +144,7 @@ export function Desk() {
     setCitations([]);
     setStatus("Opening the desk.");
     try {
-      const response = await research({ data: { mint: next } });
+      const response = await research({ data: { mint: next, mode } });
       if (!(response instanceof Response) || !response.body) {
         throw new Error("Grok returned an unexpected response.");
       }
@@ -178,10 +209,54 @@ export function Desk() {
           The trail the vibes left.
         </h1>
         <p className="mt-4 max-w-2xl text-pretty text-base text-mute sm:text-lg">
-          Paste a Solana contract. Ashline shows the holders and the last buy, then Grok reads the timeline,
-          the chain, and the web. You get receipts and red flags. Not a buy signal.
+          Paste a contract on Solana, Base, Ethereum, or another chain. Ashline scores the flags, then Grok reads the timeline against the chain. You get receipts. Not a buy signal.
         </p>
       </section>
+
+      <div className="mt-6 flex flex-wrap gap-2">
+        {(
+          [
+            ["desk", "Report"],
+            ["tape", "Tape"],
+            ["reply", "Reply"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={`h-10 rounded-full px-4 text-sm ${lane === id ? "bg-ink text-paper" : "bg-card text-mute shadow-card"}`}
+            onClick={() => setLane(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {lane === "reply" ? (
+        <form
+          className="mt-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void readBothSides("reply");
+          }}
+        >
+          <label htmlFor="reply" className="text-xs font-medium tracking-widest text-mute uppercase">
+            Reply guy
+          </label>
+          <textarea
+            id="reply"
+            value={replyDraft}
+            rows={3}
+            onChange={(event) => setReplyDraft(event.target.value)}
+            className="mt-2 w-full rounded-2xl bg-card px-4 py-3 font-mono text-sm text-ink shadow-card outline-none"
+          />
+          <button type="submit" className="mt-3 h-11 rounded-full bg-filament px-5 text-sm font-medium text-paper" disabled={running}>
+            {running ? "Grok is reading" : "Answer from the receipts"}
+          </button>
+        </form>
+      ) : null}
+
+      {lane === "tape" ? <TapeBoard rows={tape} loading={tapeLoading} error={tapeError} onOpen={(value) => { lockMint(value); setLane("desk"); }} /> : null}
 
       <section className="mt-8">
         <label htmlFor="contract" className="text-xs font-medium tracking-widest text-mute uppercase">
@@ -195,18 +270,18 @@ export function Desk() {
             autoCapitalize="off"
             autoCorrect="off"
             spellCheck={false}
-            placeholder="Any Solana contract, or a pump.fun link"
+            placeholder="Solana mint, 0x contract, or a token link"
             className="mt-2 h-14 w-full rounded-2xl bg-card px-4 font-mono text-xs text-ink shadow-card outline-none placeholder:text-mute sm:text-sm"
             onChange={(event) => {
               const value = event.target.value;
               setDraft(value);
               const next = extractMint(value);
-              if (next && next.length >= 43) lockMint(value);
+              if (next && (isEvmAddress(next) || next.length >= 43)) lockMint(value);
               else if (value.trim().length > 20) {
                 setReject(
                   next
-                    ? "That address looks cut off. A Solana contract is usually 43–44 characters."
-                    : "That is not a full Solana contract yet. Paste the whole address.",
+                    ? "That address looks cut off. Solana mints are usually 43–44 characters. EVM contracts start with 0x."
+                    : "That is not a full contract yet. Paste a Solana mint or a 0x address.",
                 );
               } else setReject(null);
             }}
@@ -256,20 +331,20 @@ export function Desk() {
           </button>
           <a
             className={`inline-flex h-11 items-center gap-1.5 rounded-full bg-ink px-4 text-sm font-medium text-paper ${mint ? "" : "pointer-events-none opacity-40"}`}
-            href={mint ? `https://pump.fun/coin/${mint}` : undefined}
+            href={mint ? (isEvmAddress(mint) ? `https://dexscreener.com/search?q=${mint}` : `https://pump.fun/coin/${mint}`) : undefined}
             target="_blank"
             rel="noreferrer"
           >
-            pump.fun
+            {mint && isEvmAddress(mint) ? "DexScreener" : "pump.fun"}
             <ArrowUpRight className="size-4" aria-hidden="true" />
           </a>
           <a
             className={`inline-flex h-11 items-center rounded-full bg-card px-4 text-sm font-medium text-ink shadow-card ${mint ? "" : "pointer-events-none opacity-40"}`}
-            href={mint ? `https://solscan.io/token/${mint}` : undefined}
+            href={mint ? (chain ? chain.explorerUrl : isEvmAddress(mint) ? walletUrl("ethereum", mint).replace("/address/", "/token/") : `https://solscan.io/token/${mint}`) : undefined}
             target="_blank"
             rel="noreferrer"
           >
-            Solscan
+            {chain?.explorerLabel ?? "Explorer"}
           </a>
           <button type="button" className="inline-flex h-11 items-center gap-2 rounded-full bg-card px-4 text-sm font-medium text-ink shadow-card disabled:opacity-40" disabled={!mint} onClick={() => void copyMint()}>
             <Copy className="size-4" aria-hidden="true" />
@@ -287,6 +362,9 @@ export function Desk() {
           <button type="button" className="h-10 rounded-full px-3 text-filament" onClick={() => lockMint(SAMPLE)}>
             Try $GROKATHON
           </button>
+          <button type="button" className="h-10 rounded-full px-3 text-filament" onClick={() => lockMint(BASE_SAMPLE)}>
+            Try Base
+          </button>
           {recents
             .filter((row) => row.mint !== mint)
             .map((row) => (
@@ -297,9 +375,9 @@ export function Desk() {
         </div>
       </section>
 
-      {!mint ? <Lenses /> : null}
+      {lane === "desk" && !mint ? <Lenses /> : null}
 
-      {mint ? (
+      {lane !== "tape" && mint ? (
         <div className="mt-8 grid items-start gap-6 lg:grid-cols-12">
           <section className="space-y-4 lg:col-span-7">
             {chainError ? (
@@ -329,6 +407,75 @@ export function Desk() {
         public web. Holders decide.
       </footer>
     </main>
+  );
+}
+
+function RiskCard({ chain }: { chain: ChainReport }) {
+  return (
+    <article className="rounded-2xl bg-card p-4 shadow-card sm:p-5">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <p className="text-xs tracking-widest text-mute uppercase">Risk flags</p>
+          <p className="mt-1 font-serif text-5xl tabular-nums">{chain.risk.score}</p>
+        </div>
+        <p className={`text-xs tracking-widest uppercase ${chain.risk.band === "elevated" ? "text-ember" : chain.risk.band === "watch" ? "text-filament" : "text-mute"}`}>
+          {chain.risk.band}
+        </p>
+      </div>
+      <p className="mt-2 text-sm text-mute">A higher number means more sourced flags. It is not a buy or a sell.</p>
+      <ul className="mt-4 space-y-3">
+        {chain.risk.points.map((point) => (
+          <li key={point.text} className="text-sm">
+            <p className="text-pretty">
+              <span className="font-medium tabular-nums">+{point.points}</span> {point.text}
+            </p>
+            <Receipt href={point.sourceUrl} label={point.sourceLabel} />
+          </li>
+        ))}
+      </ul>
+    </article>
+  );
+}
+
+function TapeBoard({
+  rows,
+  loading,
+  error,
+  onOpen,
+}: {
+  rows: TapeRow[];
+  loading: boolean;
+  error: string | null;
+  onOpen: (mint: string) => void;
+}) {
+  return (
+    <section className="mt-6">
+      <h2 className="font-serif text-3xl">The tape</h2>
+      <p className="mt-2 max-w-2xl text-sm text-pretty text-mute">
+        Fresh launches from pump.fun and the latest DexScreener profiles. Flags here are pattern checks, not a Grok read. Open one to research it.
+      </p>
+      {error ? <p className="mt-4 text-sm text-ember">{error}</p> : null}
+      {loading && !rows.length ? <p className="mt-4 text-sm text-mute">Reading the latest launches.</p> : null}
+      <ul className="mt-4 space-y-3">
+        {rows.map((row) => (
+          <li key={`${row.chainId}-${row.mint}`}>
+            <button type="button" className="w-full rounded-2xl bg-card p-4 text-left shadow-card" onClick={() => onOpen(row.mint)}>
+              <div className="flex items-baseline justify-between gap-3">
+                <p className="font-serif text-2xl">{row.name}</p>
+                <p className="text-xs tracking-widest text-mute uppercase">{row.chainLabel}</p>
+              </div>
+              <p className="mt-1 font-mono text-xs text-mute">${row.symbol.replace(/^\$/, "")}</p>
+              <p className="mt-2 text-sm text-mute">
+                {usd(row.marketCapUsd)}
+                {row.liquidityUsd != null ? ` · ${usd(row.liquidityUsd)} liquidity` : ""}
+                {row.createdAt ? ` · ${ago(row.createdAt)}` : ""}
+              </p>
+              <p className="mt-2 text-sm text-pretty">{row.flags.join(" · ")}</p>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -393,11 +540,14 @@ function ChainDesk({ chain }: { chain: ChainReport }) {
               <p className="font-mono text-sm text-mute">${chain.symbol}</p>
             </div>
             <p className="mt-2 text-sm text-mute">
-              {chain.onBondingCurve === true
-                ? "Still on the pump.fun curve"
-                : chain.onBondingCurve === false
-                  ? "Graduated off the pump.fun curve"
-                  : "Trading outside the pump.fun curve"}
+              {chain.chainLabel}
+              {chain.chainId === "solana"
+                ? chain.onBondingCurve === true
+                  ? " · still on the pump.fun curve"
+                  : chain.onBondingCurve === false
+                    ? " · graduated off the pump.fun curve"
+                    : " · outside the pump.fun curve"
+                : ""}
               {chain.createdAt ? ` · launched ${ago(chain.createdAt)}` : ""}
               {chain.holders != null ? ` · ${chain.holders} holders` : ""}
             </p>
@@ -414,7 +564,8 @@ function ChainDesk({ chain }: { chain: ChainReport }) {
             <External key={site.url} href={site.url} label={site.type} />
           ))}
           <External href={chain.dexUrl} label="DexScreener" />
-          <External href={chain.rugcheckUrl} label="Rugcheck" />
+          {chain.chainId === "solana" ? <External href={chain.rugcheckUrl} label="Rugcheck" /> : null}
+          <External href={chain.explorerUrl} label={chain.explorerLabel} />
         </div>
       </article>
 
@@ -422,9 +573,10 @@ function ChainDesk({ chain }: { chain: ChainReport }) {
         <Stat label="Market cap" value={usd(chain.marketCapUsd)} />
         <Stat label="Liquidity" value={usd(chain.liquidityUsd)} />
         <Stat label="24h volume" value={usd(chain.volume24hUsd)} />
-        <Stat label="SOL in curve" value={sol(chain.solInCurve)} />
+        <Stat label={chain.chainId === "solana" ? "SOL in curve" : "Buys / sells"} value={chain.chainId === "solana" ? sol(chain.solInCurve) : `${chain.buys24h ?? "—"}/${chain.sells24h ?? "—"}`} />
       </dl>
 
+      <RiskCard chain={chain} />
       <LastBuy chain={chain} />
       <Holders chain={chain} />
 
@@ -439,7 +591,7 @@ function ChainDesk({ chain }: { chain: ChainReport }) {
             {chain.creators.map((creator) => (
               <li key={creator.address} className="flex flex-wrap items-baseline justify-between gap-2">
                 <span className="text-mute">{creator.role}</span>
-                <a className="font-mono text-xs" href={`https://solscan.io/account/${creator.address}`} target="_blank" rel="noreferrer">
+                <a className="font-mono text-xs" href={walletUrl(chain.chainId, creator.address)} target="_blank" rel="noreferrer">
                   {shortAddr(creator.address)}
                 </a>
               </li>
@@ -487,10 +639,10 @@ function LastBuy({ chain }: { chain: ChainReport }) {
       </div>
       {buy ? (
         <>
-          <p className="mt-3 font-serif text-4xl tabular-nums">{sol(buy.sol)}</p>
+          <p className="mt-3 font-serif text-4xl tabular-nums">{buy.display ?? sol(buy.sol)}</p>
           <p className="mt-1 text-sm text-paper/80">{compactNum(buy.tokens)} tokens</p>
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm">
-            <a className="font-mono text-xs" href={`https://solscan.io/account/${buy.wallet}`} target="_blank" rel="noreferrer">
+            <a className="font-mono text-xs" href={walletUrl(chain.chainId, buy.wallet)} target="_blank" rel="noreferrer">
               {shortAddr(buy.wallet)}
             </a>
             <a className="inline-flex items-center gap-1 text-filament" href={buy.url} target="_blank" rel="noreferrer">
@@ -504,7 +656,7 @@ function LastBuy({ chain }: { chain: ChainReport }) {
       )}
       {latest && latest.signature !== buy?.signature ? (
         <p className="mt-4 border-t border-paper/15 pt-3 text-sm text-paper/75">
-          Latest trade is a {latest.side} · {sol(latest.sol)} · {ago(latest.time)}
+          Latest trade is a {latest.side} · {latest.display ?? sol(latest.sol)} · {ago(latest.time)}
         </p>
       ) : null}
       {chain.trades.length ? (
@@ -522,7 +674,7 @@ function TapeRow({ trade }: { trade: Trade }) {
   return (
     <li className="grid grid-cols-[3.5rem_1fr_3.2rem_4.5rem] items-center gap-2 text-xs">
       <span className="uppercase tracking-wider text-paper/60">{trade.side}</span>
-      <span className="tabular-nums">{sol(trade.sol)}</span>
+      <span className="tabular-nums">{trade.display ?? sol(trade.sol)}</span>
       <span className="text-paper/60">{ago(trade.time)}</span>
       <a className="font-mono" href={trade.url} target="_blank" rel="noreferrer">
         {shortAddr(trade.wallet)}
@@ -536,8 +688,8 @@ function Holders({ chain }: { chain: ChainReport }) {
     <article className="rounded-2xl bg-card p-4 shadow-card sm:p-5">
       <div className="flex items-baseline justify-between gap-3">
         <h3 className="font-serif text-2xl">Holders</h3>
-        <a className="text-sm text-filament" href={chain.rugcheckUrl} target="_blank" rel="noreferrer">
-          Rugcheck
+        <a className="text-sm text-filament" href={chain.chainId === "solana" ? chain.rugcheckUrl : chain.explorerUrl} target="_blank" rel="noreferrer">
+          {chain.chainId === "solana" ? "Rugcheck" : chain.explorerLabel}
         </a>
       </div>
       <p className="mt-2 text-sm text-pretty text-mute">
@@ -551,7 +703,7 @@ function Holders({ chain }: { chain: ChainReport }) {
         {chain.holderRows.map((row) => (
           <li key={row.owner}>
             <div className="flex items-baseline justify-between gap-3 text-sm">
-              <a className="truncate font-mono text-xs" href={`https://solscan.io/account/${row.owner}`} target="_blank" rel="noreferrer">
+              <a className="truncate font-mono text-xs" href={walletUrl(chain.chainId, row.owner)} target="_blank" rel="noreferrer">
                 {row.label ? `${row.label} · ` : ""}
                 {shortAddr(row.owner)}
               </a>
@@ -661,23 +813,63 @@ function AgentPanel({
 }
 
 function DossierView({ dossier, citations }: { dossier: Dossier; citations: string[] }) {
-  const blocks = [
-    { label: "What X is saying", text: dossier.timeline },
-    { label: "What the chain is showing", text: dossier.chain },
-    { label: "What the web adds", text: dossier.web },
-  ];
   return (
     <div className="mt-6 border-t border-rule pt-5">
       <p className="text-xs tracking-widest text-filament uppercase">Filed dossier</p>
       <h3 className="mt-2 font-serif text-3xl leading-tight text-balance">{dossier.headline}</h3>
-      <div className="mt-5 space-y-4">
-        {blocks.map((block) => (
-          <section key={block.label}>
-            <h4 className="text-xs tracking-widest text-mute uppercase">{block.label}</h4>
-            <p className="mt-1 text-sm text-pretty">{block.text || "Unread."}</p>
-          </section>
-        ))}
+      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+        <section className="rounded-xl bg-paper px-3 py-3">
+          <h4 className="text-xs tracking-widest text-mute uppercase">Timeline</h4>
+          <p className="mt-1 text-sm text-pretty">{dossier.timeline || "Unread."}</p>
+        </section>
+        <section className="rounded-xl bg-paper px-3 py-3">
+          <h4 className="text-xs tracking-widest text-mute uppercase">Chain</h4>
+          <p className="mt-1 text-sm text-pretty">{dossier.chain || "Unread."}</p>
+        </section>
       </div>
+      <section className="mt-4">
+        <h4 className="text-xs tracking-widest text-mute uppercase">What the web adds</h4>
+        <p className="mt-1 text-sm text-pretty">{dossier.web || "Unread."}</p>
+      </section>
+      {dossier.reply ? (
+        <section className="mt-4 rounded-xl bg-ink px-3 py-3 text-paper">
+          <h4 className="text-xs tracking-widest text-filament uppercase">Reply</h4>
+          <p className="mt-1 text-sm text-pretty">{dossier.reply}</p>
+        </section>
+      ) : null}
+      {dossier.mismatches.length ? (
+        <ul className="mt-4 space-y-3">
+          {dossier.mismatches.map((item) => (
+            <li key={`${item.title}-${item.hype}`} className="border-l-2 border-ember pl-3">
+              <p className="text-xs tracking-widest text-ember uppercase">Mismatch · {item.title}</p>
+              <p className="mt-1 text-sm text-pretty">{item.hype}</p>
+              <p className="mt-1 text-sm text-pretty text-mute">{item.chainFact}</p>
+              <Receipt href={item.sourceUrl} label="Receipt" />
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <section className="mt-4">
+        <h4 className="text-xs tracking-widest text-mute uppercase">Dev dossier</h4>
+        <p className="mt-1 text-sm text-pretty">
+          {dossier.devWallet ? dossier.devWallet : "Deployer unread."}
+          {dossier.devHandle ? ` · ${dossier.devHandle}` : ""}
+        </p>
+        {dossier.devNote ? <p className="mt-1 text-sm text-pretty text-mute">{dossier.devNote}</p> : null}
+        {dossier.earlier.length ? (
+          <ul className="mt-2 space-y-2">
+            {dossier.earlier.map((item) => (
+              <li key={`${item.name}-${item.outcome}`} className="text-sm">
+                <p className="font-medium">{item.name}</p>
+                <p className="text-pretty text-mute">{item.outcome}</p>
+                <Receipt href={item.sourceUrl} label="Earlier launch" />
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1 text-sm text-mute">No sourced earlier launch.</p>
+        )}
+      </section>
       {dossier.flags.length ? (
         <ul className="mt-5 space-y-3">
           {dossier.flags.map((flag) => (
