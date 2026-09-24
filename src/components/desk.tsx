@@ -264,16 +264,26 @@ export function Desk() {
             </p>
           ) : null}
           {running && status ? <p className="mt-3 text-sm text-mute">{status}</p> : null}
-          {agentError ? (
+          {agentError && !dossier?.reply ? (
             <p role="alert" className="mt-3 text-sm text-ember">
               {agentError}
             </p>
           ) : null}
           {dossier?.reply ? (
             <article className="mt-4 rounded-2xl bg-ink p-4 text-paper">
-              <p className="text-xs tracking-widest text-filament uppercase">Reply</p>
+              <p className="text-xs tracking-widest text-filament uppercase">{dossier.chainOnly ? "Chain reply" : "Reply"}</p>
               <p className="mt-2 text-sm text-pretty">{dossier.reply}</p>
-              <p className="mt-3 text-xs text-paper/60">Not financial advice. Research only.</p>
+              {dossier.chainOnly ? (
+                <p className="mt-3 text-xs text-pretty text-paper/70">
+                  Grok credit is used up, so the timeline was not read. This is the chain side only.{" "}
+                  <a className="underline" href="https://grok.com/?_s=usage" target="_blank" rel="noreferrer">
+                    Add credits
+                  </a>{" "}
+                  and ask again to search X.
+                </p>
+              ) : (
+                <p className="mt-3 text-xs text-paper/60">Not financial advice. Research only.</p>
+              )}
             </article>
           ) : null}
         </form>
@@ -818,7 +828,11 @@ function AgentPanel({
         )}
       </div>
       <p className="mt-1 text-sm text-mute">
-        {dossier ? "Dossier filed. Research, not a signal." : (status ?? "Grok decides the order. Tool calls show up here.")}
+        {dossier?.chainOnly
+          ? "Chain receipts filed. Grok did not read the timeline."
+          : dossier
+            ? "Dossier filed. Research, not a signal."
+            : (status ?? "Grok decides the order. Tool calls show up here.")}
       </p>
 
       {idle ? (
@@ -843,7 +857,7 @@ function AgentPanel({
         </ol>
       ) : null}
 
-      {error ? (
+      {error && !dossier ? (
         <p role="alert" className="mt-4 text-sm text-ember">
           {error}
         </p>
@@ -877,6 +891,9 @@ function DossierView({ dossier, citations }: { dossier: Dossier; citations: stri
         <section className="mt-4 rounded-xl bg-ink px-3 py-3 text-paper">
           <h4 className="text-xs tracking-widest text-filament uppercase">Reply</h4>
           <p className="mt-1 text-sm text-pretty">{dossier.reply}</p>
+          {dossier.chainOnly ? (
+            <p className="mt-2 text-xs text-pretty text-paper/70">Chain receipts only. The timeline was not read on this pass.</p>
+          ) : null}
         </section>
       ) : null}
       {dossier.mismatches.length ? (

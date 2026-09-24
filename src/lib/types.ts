@@ -138,6 +138,7 @@ export type Dossier = {
   devNote: string;
   earlier: EarlierLaunch[];
   reply: string;
+  chainOnly?: boolean;
 };
 
 export type ResearchEvent =

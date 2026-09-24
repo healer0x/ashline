@@ -1,8 +1,10 @@
 import { readChain } from "./chain.server";
+import { ago, shortAddr, sol, usd } from "./mint";
 import type { ChainReport, Dossier, ResearchEvent, TraceItem } from "./types";
 
 const MODEL = "grok-4.5";
 const stamps: number[] = [];
+const remembered = new Map<string, Dossier>();
 
 type Send = (event: ResearchEvent) => void;
 type GrokItem = {
@@ -312,7 +314,7 @@ async function callGrok(key: string, body: Record<string, unknown>): Promise<Gro
     body: JSON.stringify({
       model: MODEL,
       temperature: 0.2,
-      max_output_tokens: 3200,
+      max_output_tokens: 1800,
       reasoning: { effort: "low" },
       ...body,
     }),
@@ -320,10 +322,89 @@ async function callGrok(key: string, body: Record<string, unknown>): Promise<Gro
   });
   const text = await res.text();
   if (!res.ok) {
+    let detail = "";
+    try {
+      const body = JSON.parse(text) as { error?: string; code?: string };
+      detail = body.error ?? "";
+      if (body.code?.includes("spending-limit") || /credit|subscription/i.test(detail)) {
+        throw new Error("Grok credit for this desk is used up.");
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Grok credit")) throw error;
+    }
     console.error("Ashline Grok error", res.status, text.slice(0, 400));
-    throw new Error(`Grok could not answer (${res.status}).`);
+    throw new Error(detail ? `Grok could not answer. ${detail}` : `Grok could not answer (${res.status}).`);
   }
   return JSON.parse(text) as GrokResponse;
+}
+
+function fromChain(chain: ChainReport): Dossier {
+  const last = chain.lastBuy;
+  const lastText = last
+    ? `Last buy ${last.display ?? sol(last.sol)} from ${shortAddr(last.wallet)}, ${ago(last.time)}.`
+    : "No last buy was in the tape we read.";
+  const holders = chain.holders != null ? `${chain.holders} holders` : "Holder count was not in the index";
+  const liq = chain.liquidityUsd != null ? `liquidity ${usd(chain.liquidityUsd)}` : "liquidity unread";
+  const cap = chain.marketCapUsd != null ? `market cap ${usd(chain.marketCapUsd)}` : "market cap unread";
+  const controls = [
+    chain.mintAuthority ? "a mint or owner authority is still set" : null,
+    chain.freezeAuthority ? "freeze authority is still set" : null,
+  ].filter(Boolean);
+  const controlText = controls.length ? controls.join(", ") : "no mint or freeze authority was in the data we read";
+  const curve =
+    chain.onBondingCurve === true
+      ? "Liquidity is still a bonding curve."
+      : chain.onBondingCurve === false
+        ? "It is not showing as a bonding curve."
+        : "";
+  const risk = `Risk score ${chain.risk.score}, band ${chain.risk.band}.`;
+  const flags = chain.risk.points.slice(0, 6).map((point) => ({
+    level: (point.points >= 18 ? "elevated" : point.points >= 12 ? "watch" : "clear") as Dossier["flags"][number]["level"],
+    title: clip(point.text, 80),
+    detail: clip(point.text, 320),
+    sourceUrl: point.sourceUrl,
+  }));
+  const claims = [
+    { text: lastText, sourceUrl: last?.url || chain.explorerUrl, sourceLabel: "Tape" },
+    { text: `${holders}. ${liq}. ${cap}.`, sourceUrl: chain.dexUrl || chain.explorerUrl, sourceLabel: "DexScreener" },
+    ...chain.risk.points.slice(0, 4).map((point) => ({
+      text: point.text,
+      sourceUrl: point.sourceUrl,
+      sourceLabel: point.sourceLabel,
+    })),
+  ].filter((row) => row.text && row.sourceUrl);
+  const dev = chain.creators[0]?.address ?? "";
+  return {
+    headline: `${chain.symbol || chain.name || "This contract"} on ${chain.chainLabel}. ${risk} The timeline was not read.`,
+    timeline: "Unread. Grok did not search X on this pass.",
+    chain: [holders + ".", lastText, `${liq}. ${cap}.`, controlText + ".", curve, chain.launch?.note].filter(Boolean).join(" "),
+    web: chain.websites.length
+      ? `The market index lists ${chain.websites.map((site) => site.url).join(", ")}.`
+      : "No website was on the market index we read.",
+    flags,
+    claims,
+    mismatches: [],
+    devWallet: dev,
+    devHandle: "",
+    devNote: dev
+      ? "This wallet is the deployer or owner from the chain index. Earlier launches were not searched on this pass."
+      : "Deployer unread on this pass.",
+    earlier: chain.priorLaunches.slice(0, 4).map((row) => ({
+      name: row.symbol || row.name,
+      outcome: row.note,
+      sourceUrl: row.url,
+    })),
+    reply: [
+      `${chain.symbol || chain.name || "This contract"} on ${chain.chainLabel}. ${risk}`,
+      lastText,
+      `${holders}. ${liq}. ${cap}. ${controlText}.`,
+      curve,
+      "Not a yes, a no, or a trade.",
+    ]
+      .filter(Boolean)
+      .join(" "),
+    chainOnly: true,
+  };
 }
 
 function collectUrls(value: unknown, into: Set<string>, depth = 0) {
@@ -349,9 +430,17 @@ function trace(id: string, tool: string, state: TraceItem["state"], detail: stri
 }
 
 async function runAgent(mint: string, chain: ChainReport, send: Send, mode: "report" | "reply") {
+  const saved = remembered.get(mint);
+  if (saved && !saved.chainOnly) {
+    send(trace("saved", "grok", "done", "Using the dossier already filed for this contract."));
+    send({ type: "dossier", dossier: saved });
+    return;
+  }
+
   const key = process.env.XAI_API_KEY;
   if (!key) {
-    send({ type: "error", message: "Grok is not available in this environment. The chain reading above is still live." });
+    send(trace("grok-down", "grok", "refused", "Grok is not available. Filing the chain receipts."));
+    send({ type: "dossier", dossier: fromChain(chain) });
     return;
   }
 
@@ -372,6 +461,7 @@ ${chain.sources.map((source) => source.url).join("\n")}`,
   let xCalls = 0;
   const citations = new Set<string>();
 
+  try {
   for (let round = 0; round < 4 && !filed; round++) {
     send(trace(`turn-${round}`, "grok", "running", round === 0 ? "Choosing which side to read first." : "Working from the last receipts."));
     const payload: Record<string, unknown> = { input, tools: TOOLS };
@@ -474,14 +564,20 @@ ${chain.sources.map((source) => source.url).join("\n")}`,
     }
     input = outputs;
   }
-
-  if (!filed) {
-    send({
-      type: "error",
-      message: "Grok stopped before filing a dossier. Holder and trade receipts above are still from the chain.",
-    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Grok could not answer.";
+    send(trace("grok-down", "grok", "refused", message));
+    send({ type: "status", text: "Answering from the chain receipts." });
+    send({ type: "dossier", dossier: fromChain(chain) });
     return;
   }
+
+  if (!filed) {
+    send(trace("grok-down", "grok", "refused", "Grok stopped before filing. Using the chain receipts."));
+    send({ type: "dossier", dossier: fromChain(chain) });
+    return;
+  }
+  remembered.set(mint, filed);
   const urls = [...citations].filter((url) => /^https?:\/\//.test(url)).slice(0, 12);
   if (urls.length) send({ type: "citations", urls });
   send({ type: "dossier", dossier: filed });
