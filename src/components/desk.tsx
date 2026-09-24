@@ -18,10 +18,8 @@ const TOOL_LABEL: Record<string, string> = {
   file_dossier: "Dossier",
 };
 
-const BASE_SAMPLE = "0x532f27101965dd16442E59d40670FaF5eBB142E4";
-
 type Lane = "desk" | "tape" | "reply";
-type Recent = { mint: string; symbol: string };
+type Recent = { mint: string; symbol: string; chain?: string };
 
 export function Desk() {
   const [draft, setDraft] = useState("");
@@ -56,7 +54,9 @@ export function Desk() {
       const raw = localStorage.getItem("ashline.recents");
       if (!raw) return;
       const parsed = JSON.parse(raw) as Recent[];
-      if (Array.isArray(parsed)) setRecents(parsed.slice(0, 4));
+      if (Array.isArray(parsed)) {
+        setRecents(parsed.filter((row) => row && typeof row.mint === "string").slice(0, 8));
+      }
     } catch {
       /* ignore broken local history */
     }
@@ -72,7 +72,7 @@ export function Desk() {
         if (chainSeq.current !== seq) return;
         setChain(report);
         setRecents((current) => {
-          const next = [{ mint, symbol: report.symbol }, ...current.filter((row) => row.mint !== mint)].slice(0, 4);
+          const next = [{ mint, symbol: report.symbol, chain: report.chainLabel }, ...current.filter((row) => row.mint !== mint)].slice(0, 8);
           localStorage.setItem("ashline.recents", JSON.stringify(next));
           return next;
         });
@@ -133,16 +133,18 @@ export function Desk() {
 
   async function readBothSides(mode: "report" | "reply" = "report") {
     if (running) return;
-    const source = mode === "reply" ? replyDraft : (mint ?? draft);
-    const next = lockMint(source);
-    if (!next) return;
-    setLane("desk");
+    const source = mode === "reply" ? (extractMint(replyDraft) ?? mint ?? draft) : (mint ?? draft);
+    const next = lockMint(typeof source === "string" ? source : "");
+    if (!next) {
+      if (mode === "reply") setReject("Put a contract in the question, or open one on the plate first.");
+      return;
+    }
     setRunning(true);
     setAgentError(null);
     setDossier(null);
     setTraces([]);
     setCitations([]);
-    setStatus("Opening the desk.");
+    setStatus(mode === "reply" ? "Answering from the receipts." : "Opening the desk.");
     try {
       const response = await research({ data: { mint: next, mode } });
       if (!(response instanceof Response) || !response.body) {
@@ -250,9 +252,30 @@ export function Desk() {
             onChange={(event) => setReplyDraft(event.target.value)}
             className="mt-2 w-full rounded-2xl bg-card px-4 py-3 font-mono text-sm text-ink shadow-card outline-none"
           />
-          <button type="submit" className="mt-3 h-11 rounded-full bg-filament px-5 text-sm font-medium text-paper" disabled={running}>
+          <p className="mt-2 max-w-xl text-sm text-pretty text-mute">
+            Ask about the contract on the plate, or paste one in the question. The answer stays here. It is not a yes or a no to trade.
+          </p>
+          <button type="submit" className="mt-3 h-11 rounded-full bg-filament px-5 text-sm font-medium text-paper disabled:opacity-50" disabled={running}>
             {running ? "Grok is reading" : "Answer from the receipts"}
           </button>
+          {reject ? (
+            <p role="alert" className="mt-3 text-sm text-ember">
+              {reject}
+            </p>
+          ) : null}
+          {running && status ? <p className="mt-3 text-sm text-mute">{status}</p> : null}
+          {agentError ? (
+            <p role="alert" className="mt-3 text-sm text-ember">
+              {agentError}
+            </p>
+          ) : null}
+          {dossier?.reply ? (
+            <article className="mt-4 rounded-2xl bg-ink p-4 text-paper">
+              <p className="text-xs tracking-widest text-filament uppercase">Reply</p>
+              <p className="mt-2 text-sm text-pretty">{dossier.reply}</p>
+              <p className="mt-3 text-xs text-paper/60">Not financial advice. Research only.</p>
+            </article>
+          ) : null}
         </form>
       ) : null}
 
@@ -358,21 +381,40 @@ export function Desk() {
           </p>
         ) : null}
 
-        <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
+        <div className="mt-4">
           <button type="button" className="h-10 rounded-full px-3 text-filament" onClick={() => lockMint(SAMPLE)}>
             Try $GROKATHON
           </button>
-          <button type="button" className="h-10 rounded-full px-3 text-filament" onClick={() => lockMint(BASE_SAMPLE)}>
-            Try Base
-          </button>
-          {recents
-            .filter((row) => row.mint !== mint)
-            .map((row) => (
-              <button key={row.mint} type="button" className="h-10 rounded-full px-3 font-mono text-xs text-mute" onClick={() => lockMint(row.mint)}>
-                {row.symbol} {shortAddr(row.mint)}
-              </button>
-            ))}
         </div>
+
+        <section className="mt-6">
+          <h2 className="font-serif text-2xl">Recently checked</h2>
+          {recents.length ? (
+            <ul className="mt-3 space-y-2">
+              {recents.map((row) => (
+                <li key={row.mint}>
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between gap-3 rounded-2xl bg-card px-4 py-3 text-left shadow-card"
+                    onClick={() => {
+                      lockMint(row.mint);
+                      setLane("desk");
+                    }}
+                  >
+                    <span>
+                      <span className="font-medium">{row.symbol}</span>
+                      {row.chain ? <span className="ml-2 text-xs tracking-widest text-mute uppercase">{row.chain}</span> : null}
+                      <span className="mt-1 block font-mono text-xs text-mute">{shortAddr(row.mint)}</span>
+                    </span>
+                    <span className="text-xs text-filament">{row.mint === mint ? "Open" : "Open again"}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-sm text-mute">Contracts you open will stay here on this browser.</p>
+          )}
+        </section>
       </section>
 
       {lane === "desk" && !mint ? <Lenses /> : null}
